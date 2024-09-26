@@ -222,11 +222,11 @@ selectWipe () {
     then
         wipeType="Fast"
         echo "${GREEN}SUCCESS${STD}: Select Wipe Type Fast"
-    elif [[  ]];
+    elif [[ $n == 2 ]];
     then
         wipeType="Mid"
         echo "${GREEN}SUCCESS${STD}: Select Wipe Type Mid"
-    elif [[  ]];
+    elif [[ $n == 3 ]];
     then
         wipeType="Long"
         echo "${GREEN}SUCCESS${STD}: Select Wipe Type Long"

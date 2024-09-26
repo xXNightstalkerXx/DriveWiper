@@ -1,0 +1,352 @@
+#!/bin/bash
+
+# Color Declarations
+STD=$(tput setaf 15)
+RED=$(tput setaf 9 bold)
+GREEN=$(tput setaf 10 bold)
+YELLOW=$(tput setaf 11 bold)
+BLUE=$(tput setaf 27 bold)
+
+# Define Variable to check if there was a Problem while executing commands
+execOkay="True"
+
+# Define Variables for Wipe type selection
+wipeType="Long"
+
+# Check if the Script is run as root
+if [ "$EUID" -ne 0 ]; then
+    echo ""
+    echo "${RED}This script must be run as root!${STD}"
+    echo ""
+    sleep 3
+    exit 1
+fi
+
+# Define Functions
+askContinue () {
+    read -r -p "Continue anyway? (y/n): " input
+    while ! [[ "$input" =~ ^(y|n)$ ]];
+    do
+        echo ""
+        echo "${RED}Wrong Input! Enter 'y' or 'n'!${STD}"
+        read -r -p "Continue anyway? (y/n): " input
+    done
+    if [[ "$input" =~ ^(n)$ ]];
+    then
+        echo ""
+        echo "${RED}Terminating Script now!${STD}"
+        echo ""
+        sleep 2
+        exit 1
+    fi
+}
+
+askReboot () {
+    echo ""
+    echo ""
+    read -r -p "Do you want to reboot the system now? (y/n): " input
+    while ! [[ "$input" =~ ^(y|n)$ ]];
+    do
+        echo ""
+        echo "${RED}Wrong Input! Enter 'y' or 'n'!${STD}"
+        read -r -p "Do you want to reboot the system now? (y/n): " input
+    done
+    if [[ "$input" =~ ^(y)$ ]];
+    then
+        echo ""
+        echo "${GREEN}Rebooting now!${STD}"
+        echo ""
+        sleep 2
+        reboot now
+        exit 0
+    fi
+}
+
+checkExecution () {
+    successMessage="${1}"
+    errorMessage="${2}"
+    if [ "${execOkay}" = "True" ];
+    then
+        echo ""
+        echo "${GREEN}${successMessage}${STD}"
+    else
+        echo ""
+        echo "${RED}${errorMessage}${STD}"
+        askContinue
+    fi
+    execOkay="True"
+}
+
+getRemovableDrive () {
+    echo ""
+    echo ""
+    echo "${YELLOW}Getting Removable Drives...${STD}"
+    execOkay="True"
+    results=$(lsblk -o NAME,SIZE,MODEL,TRAN | grep --color=never "usb" | sed 's/usb$//')
+    outputLines+=("${GREEN}-----------------------------------------${STD}")
+    formattedLine=$(printf " %-12s %-10s %-8s %-20s" "${YELLOW}ID" "Name" "Size" "Model${STD}")
+    outputLines+=("$formattedLine")
+    outputLines+=("${GREEN}-----------------------------------------${STD}")
+    counter=1
+    IFS=$'\n'
+    for line in ${results}
+    do
+        usbName="/dev/$(echo "$line" | awk '{print $1}')"
+        usbSize=$(echo "$line" | awk '{print $2}')
+        usbModel=$(echo "$line" | awk '{$1=$2=""; print $0}' | sed 's/^[ \t]*//;s/[ \t]*$//')
+        formattedLine=$(printf " %-3s %-10s %-8s %-20s" "${counter}" "${usbName}" "${usbSize}" "${usbModel}")
+        outputLines+=("$formattedLine")
+        usbNames[counter]="${usbName}"
+        ((counter++))
+    done
+    output=$(printf "%s\n" "${outputLines[@]}")
+    echo "${output}"
+    echo ""
+    if [[ $counter == 2 ]];
+    then
+        echo "${GREEN}Are you sure to Format ${usbNames[1]} ?${STD}"
+        read -r -p "Enter Answer (y/n): " a;
+        while ! [[ "$a" =~ ^(y|n)$ ]]
+        do
+            echo ""
+            echo "${RED}Wrong Input! Please enter 'y' or 'n'!${STD}"
+            read -r -p "Enter Answer (y/n): " a;
+        done
+        if [[ "$a" == "y" ]];
+        then
+            usbDevice="${usbNames[1]}"
+            echo "${GREEN}SUCCESS${STD}: Select Removable Drive"
+        else
+            usbDevice=""
+            execOkay="False"
+            echo "${RED}USB ERROR${STD}: Couldn't select Removable Drive"
+        fi
+    elif [[ $counter > 2 ]];
+    then
+        echo "${GREEN}Which USB Device do you want format?${STD}"
+        read -r -p "Enter ID (1-99): " n;
+        while ! [[ $n =~ ^[1-9][0-9]{0,2}$ && $n -le ${#usbNames[@]} ]]
+        do
+            echo ""
+            echo "${RED}Wrong Input! Please enter a valid ID!${STD}"
+            read -r -p "Enter ID (1-99): " n;
+        done
+        echo ""
+        echo "${GREEN}Are you sure to Format ${usbNames[$n]} ?${STD}"
+        read -r -p "Enter Answer (y/n): " a;
+        while ! [[ "$a" =~ ^(y|n)$ ]]
+        do
+            echo ""
+            echo "${RED}Wrong Input! Please enter 'y' or 'n'!${STD}"
+            read -r -p "Enter Answer (y/n): " a;
+        done
+        if [[ "$a" == "y" ]];
+        then
+            usbDevice="${usbNames[$n]}"
+            echo "${GREEN}SUCCESS${STD}: Select Removable Drive"
+        else
+            usbDevice=""
+            execOkay="False"
+            echo "${RED}USB ERROR${STD}: Couldn't select Removable Drive"
+        fi
+    else
+        execOkay="False"
+        echo "${RED}USB ERROR${STD}: No Removable Drive to select"
+    fi
+    checkExecution "Get Removable Drive SUCCESSFULL!" "Get Removable Drive FAILED!"
+}
+
+unmountRemovableDrive () {
+    echo ""
+    echo ""
+    echo "${YELLOW}Unmounting Removable Drive...${STD}"
+    execOkay="True"
+    if [[ "${usbDevice}" != "" ]];
+    then
+        partitions=$(lsblk -n -o NAME,MOUNTPOINT -r | grep "$(basename ${usbDevice})")
+        mountedPartitions=()
+        while IFS= read -r line;
+        do
+            partition="/dev/$(echo "${line}" | awk '{print $1}')"
+            mountPoint="$(echo "${line}" | awk '{print $2}')"
+            if [[ "$partition" != "${usbDevice}" ]];
+            then
+                if [[ -n $mountPoint ]];
+                then
+                    echo "${BLUE}INFO${STD}: Partition ${partition} mounted at ${mountPoint}"
+                    mountedPartitions+=("${partition}")
+                else
+                    echo "${GREEN}SUCCESS${STD}: Partition ${partition} not mounted"
+                fi
+            fi
+        done <<< "${partitions}"
+        if [[ ${#mountedPartitions[@]} -gt 0 ]]; then
+            for partition in "${mountedPartitions[@]}";
+            do
+                if ! umount "${partition}" > /dev/null 2>&1;
+                then
+                    execOkay="False"
+                    echo "${RED}UNMOUNT ERROR${STD}: Couldn't unmount ${partition}"
+                else
+                    echo "${GREEN}SUCCESS${STD}: Unmount ${partition}"
+                fi
+            done
+        else
+            echo "${GREEN}SUCCESS${STD}: No mounted Partitions found"
+        fi
+    else
+        execOkay="False"
+        echo "${RED}UNMOUNT ERROR${STD}: No Removable Drive selected"
+    fi
+    checkExecution "Unmount Removable Drive SUCCESSFULL!" "Unmount Removable Drive FAILED!"
+}
+
+selectWipe () {
+    echo ""
+    echo ""
+    echo "${YELLOW}Selecting Wipe Type...${STD}"
+    execOkay="True"
+    echo ""
+    echo "${GREEN}Which Wipe Type do you want to run?${STD}"
+    echo "${BLUE}1 - Fast Wipe  (1-30 sec)${STD}"
+    echo "${BLUE}2 - Mid Wipe   (1-5  hours)${STD}"
+    echo "${BLUE}3 - Long Wipe  (5-24 hours)${STD}"
+    read -r -p "Enter ID (1-3): " n;
+    while ! [[ $n =~ ^(1|2|3)$ ]]
+    do
+        echo ""
+        echo "${RED}Wrong Input! Please enter a valid ID!${STD}"
+        read -r -p "Enter ID (1-3): " n;
+    done
+    if [[ $n == 1 ]];
+    then
+        wipeType="Fast"
+        echo "${GREEN}SUCCESS${STD}: Select Wipe Type Fast"
+    elif [[  ]];
+    then
+        wipeType="Mid"
+        echo "${GREEN}SUCCESS${STD}: Select Wipe Type Mid"
+    elif [[  ]];
+    then
+        wipeType="Long"
+        echo "${GREEN}SUCCESS${STD}: Select Wipe Type Long"
+    else
+        wipeType="None"
+        execOkay="False"
+        echo "${RED}USB ERROR${STD}: Couldn't select Removable Drive"
+    fi
+    checkExecution "Select Wipe Type SUCCESSFULL!" "Select Wipe Type FAILED!"
+}
+
+wipeRemovableDriveLong () {
+    echo ""
+    echo ""
+    echo "${YELLOW}Wiping Removable Drive...${STD}"
+    execOkay="True"
+    if [[ "${usbDevice}" != "" ]];
+    then
+        sleep 5
+        for i in {1..2};
+        do
+            if [[ "${execOkay}" == "True" ]];
+            then
+                if ! dd if=/dev/zero of="${usbDevice}" bs=1M status=progress;
+                then
+                    execOkay="False"
+                    echo "${RED}WIPE ERROR${STD}: ${i}. Run - Couldn't wipe Removable Drive"
+                else
+                    sync
+                    echo "${GREEN}SUCCESS${STD}: ${i}. Run - Wipe Removable Drive"
+                fi
+            fi
+        done
+        for i in {3..6};
+        do
+            if [[ "${execOkay}" == "True" ]];
+            then
+                if ! dd if=/dev/urandom of="${usbDevice}" bs=1M status=progress;
+                then
+                    execOkay="False"
+                    echo "${RED}WIPE ERROR${STD}: ${i}. Run - Couldn't wipe Removable Drive"
+                else
+                    sync
+                    echo "${GREEN}SUCCESS${STD}: ${i}. Run - Wipe Removable Drive"
+                fi
+            fi
+        done
+        if [[ "${execOkay}" == "True" ]];
+        then
+            if ! dd if=/dev/zero of="${usbDevice}" bs=1M status=progress;
+            then
+                execOkay="False"
+                echo "${RED}WIPE ERROR${STD}: 7. Run - Couldn't wipe Removable Drive"
+            else
+                sync
+                echo "${GREEN}SUCCESS${STD}: 7. Run - Wipe Removable Drive"
+            fi
+        fi
+    else
+        execOkay="False"
+        echo "${RED}WIPE ERROR${STD}: No Removable Drive selected"
+    fi
+    checkExecution "Wipe Removable Drive SUCCESSFULL!" "Wipe Removable Drive FAILED!"
+}
+
+wipeRemovableDriveMid () {
+    echo ""
+    echo ""
+    echo "${YELLOW}Wiping Removable Drive...${STD}"
+    execOkay="True"
+    if [[ "${usbDevice}" != "" ]];
+    then
+        sleep 5
+        if ! dd if=/dev/zero of="${usbDevice}" bs=1M status=progress;
+        then
+            execOkay="False"
+            echo "${RED}WIPE ERROR${STD}: Couldn't wipe Removable Drive"
+        else
+            sync
+            echo "${GREEN}SUCCESS${STD}: Wipe Removable Drive"
+        fi
+    else
+        execOkay="False"
+        echo "${RED}WIPE ERROR${STD}: No Removable Drive selected"
+    fi
+    checkExecution "Wipe Removable Drive SUCCESSFULL!" "Wipe Removable Drive FAILED!"
+}
+
+wipeRemovableDriveFast () {
+    echo ""
+    echo ""
+    echo "${YELLOW}Wiping Removable Drive...${STD}"
+    execOkay="True"
+    if [[ "${usbDevice}" != "" ]];
+    then
+        sleep 5
+        if ! sudo sgdisk --zap-all "${usbDevice}" > /dev/null 2>&1;
+        then
+            execOkay="False"
+            echo "${RED}WIPE ERROR${STD}: Couldn't wipe Removable Drive"
+        else
+            echo "${GREEN}SUCCESS${STD}: Wipe Removable Drive"
+        fi
+    else
+        execOkay="False"
+        echo "${RED}WIPE ERROR${STD}: No Removable Drive selected"
+    fi
+    checkExecution "Wipe Removable Drive SUCCESSFULL!" "Wipe Removable Drive FAILED!"
+}
+
+# Run Program
+getRemovableDrive
+selectWipe
+unmountRemovableDrive
+if [[ "${wipeType}" == "Fast" ]];
+then
+    wipeRemovableDriveFast
+elif [[ "${wipeType}" == "Mid" ]];
+then
+    wipeRemovableDriveMid
+else
+    wipeRemovableDriveLong
+fi

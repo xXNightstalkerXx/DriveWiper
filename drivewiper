@@ -120,7 +120,7 @@ getRemovableDrive () {
             execOkay="False"
             echo "${RED}USB ERROR${STD}: Couldn't select Removable Drive"
         fi
-    elif [[ $counter > 2 ]];
+    elif [[ $counter -gt 2 ]];
     then
         echo "${GREEN}Which USB Device do you want format?${STD}"
         read -r -p "Enter ID (1-99): " n;
